@@ -56,7 +56,7 @@
 
 using namespace std;
 
-const int n=5;
+const int n=6;
 const int w=1;
 
 const int set_count = 1<<n;
@@ -67,8 +67,19 @@ uint64_t hash_value(uint64_t x) {
   return (x * (x * x * 15731 + 789221) + 1376312589) * 1234567891;
 }
 
+const int uint64_t_bits = sizeof(uint64_t)*8;
+const int base_count = (set_count + uint64_t_bits - 1) / uint64_t_bits;
+
+void set_bit(uint64_t * bitmap, int index) {
+  bitmap[index/uint64_t_bits] |= (1<<(index%uint64_t_bits));
+}
+
+bool get_bit(uint64_t * bitmap, int index) {
+  return bitmap[index/uint64_t_bits] & (1<<(index%uint64_t_bits));
+}
+
 struct sequence {
-  bool base[1<<n];
+  uint64_t base[base_count];
   int prev[w];
   uint64_t hash;
   int length;
@@ -76,7 +87,7 @@ struct sequence {
   int refs;
   
   sequence() {
-    for(int i=0; i<set_count; i++) base[i]=false;
+    for(uint i=0; i<sizeof(base)/sizeof(base[0]); i++) base[i]=false;
     for(int i=0; i<w; i++) prev[i]=0;
     tail = NULL;
     length = 0;
@@ -91,7 +102,7 @@ struct sequence {
     refs = 0;
     for(int i=0; i<w; i++) {
       hash ^= hash_value(prev[i]);
-      base[prev[i]]=true;
+      set_bit(base, prev[i]);
       prev[i]=next[i];
       next[i]=0;
     }
@@ -160,16 +171,21 @@ int main(int argc, const char *argv[]) {
     for (sequence* s : cur) {
       int next[w];
       for (int j=0; j<w; j++) next[j]=0;
-      for (int j=1; j<set_count; j++) {
-        if (s->base[j]) continue;
-        if (s->prev[0] == j) continue;
-        bool b = true;
-        for (int i=1; i<set_count && b; i++) {
-          if (s->base[i])
-            b = (i & j & ~s->prev[0]) == 0;
+      for (int T=1; T<set_count; T++) {
+        if (get_bit(s->base, T)) continue;
+        if (s->prev[0] == T) continue;
+        for (int i=0; i<base_count; i++) {
+          uint64_t m = s->base[i];
+          while (m) {
+            int R = __builtin_ctzll(m) + uint64_t_bits * i;
+            m &= m-1;
+            if (R & T & ~s->prev[0]) {
+              goto failure;
+            }
+          }
         }
-        if (b) {
-          next[0] = j;
+        {
+          next[0] = T;
           sequence * x = new sequence(s, next);
           if (!shown) {
             cout << "n=" << n << " |F_i|<=" << w << " t=" << x->length << ": " << *x << endl;
@@ -177,6 +193,7 @@ int main(int argc, const char *argv[]) {
           }
           nxt.insert(x);
         }
+        failure:;
       }
       
       if (s->refs == 0) {
