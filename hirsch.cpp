@@ -56,8 +56,9 @@
 
 using namespace std;
 
-const int n=6;
+const int n=7;
 const int w=1;
+const int d=2;
 
 const int set_count = 1<<n;
 
@@ -71,11 +72,11 @@ const int uint64_t_bits = sizeof(uint64_t)*8;
 const int base_count = (set_count + uint64_t_bits - 1) / uint64_t_bits;
 
 void set_bit(uint64_t * bitmap, int index) {
-  bitmap[index/uint64_t_bits] |= (1<<(index%uint64_t_bits));
+  bitmap[index/uint64_t_bits] |= (1ULL<<(index%uint64_t_bits));
 }
 
 bool get_bit(uint64_t * bitmap, int index) {
-  return bitmap[index/uint64_t_bits] & (1<<(index%uint64_t_bits));
+  return bitmap[index/uint64_t_bits] & (1ULL<<(index%uint64_t_bits));
 }
 
 struct sequence {
@@ -85,14 +86,16 @@ struct sequence {
   int length;
   sequence * tail;
   int refs;
+  int used;
   
   sequence() {
-    for(uint i=0; i<sizeof(base)/sizeof(base[0]); i++) base[i]=false;
+    for(uint i=0; i<base_count; i++) base[i]=false;
     for(int i=0; i<w; i++) prev[i]=0;
     tail = NULL;
     length = 0;
     refs = 0;
     hash = 0;
+    used = 0;
   }
   sequence(sequence * le_tail, int next[w]) {
     memcpy(this, le_tail, sizeof(sequence));
@@ -104,7 +107,7 @@ struct sequence {
       hash ^= hash_value(prev[i]);
       set_bit(base, prev[i]);
       prev[i]=next[i];
-      next[i]=0;
+      used |= next[i];
     }
   }
   ~sequence() {
@@ -160,7 +163,7 @@ struct seq_cmp {
 
 int main(int argc, const char *argv[]) {
   set<sequence*,seq_cmp> cur, nxt;
-  for (int i=0; i<n; i++) {
+  for (int i=0; i<1; i++) {
     sequence *s=new sequence();
     s->prev[0] = (2<<i) - 1;
     s->length = 1;
@@ -172,6 +175,7 @@ int main(int argc, const char *argv[]) {
       int next[w];
       for (int j=0; j<w; j++) next[j]=0;
       for (int T=1; T<set_count; T++) {
+        if (__builtin_popcount(T)>d) continue;
         if (get_bit(s->base, T)) continue;
         if (s->prev[0] == T) continue;
         for (int i=0; i<base_count; i++) {
@@ -188,7 +192,7 @@ int main(int argc, const char *argv[]) {
           next[0] = T;
           sequence * x = new sequence(s, next);
           if (!shown) {
-            cout << "n=" << n << " |F_i|<=" << w << " t=" << x->length << ": " << *x << endl;
+            cout << "n=" << n << " |F_i|<=" << w << " d=" << d << " t=" << x->length << ": " << *x << endl;
             shown = true;
           }
           nxt.insert(x);
