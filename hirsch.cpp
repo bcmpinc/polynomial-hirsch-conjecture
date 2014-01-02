@@ -56,8 +56,8 @@
 
 using namespace std;
 
-const int n=7;
-const int w=1;
+const int n=6;
+const int w=2;
 const int d=2;
 
 const int set_count = 1<<n;
@@ -135,8 +135,8 @@ ostream& operator<<(ostream& o, const sequence &s) {
   }
   o << "{";
   for (int i=0; i<w; i++) {
-    if (i>0) o << ",";
     if (s.prev[i]!=0) {
+      if (i>0) o << ",";
       bool not_first = false;
       o << "{";
       for (int j=0; j<n; j++) {
@@ -161,51 +161,80 @@ struct seq_cmp {
   }
 };
 
-int main(int argc, const char *argv[]) {
-  set<sequence*,seq_cmp> cur, nxt;
-  for (int i=0; i<1; i++) {
-    sequence *s=new sequence();
-    s->prev[0] = (2<<i) - 1;
-    s->length = 1;
-    cur.insert(s);
-  }
-  while (!cur.empty()) {
-    bool shown = false;
-    for (sequence* s : cur) {
-      int next[w];
-      for (int j=0; j<w; j++) next[j]=0;
-      for (int T=1; T<set_count; T++) {
-        if (__builtin_popcount(T)>d) continue;
-        if (get_bit(s->base, T)) continue;
-        if (s->prev[0] == T) continue;
-        for (int i=0; i<base_count; i++) {
-          uint64_t m = s->base[i];
-          while (m) {
-            int R = __builtin_ctzll(m) + uint64_t_bits * i;
-            m &= m-1;
-            if (R & T & ~s->prev[0]) {
-              goto failure;
-            }
-          }
-        }
-        {
-          next[0] = T;
-          sequence * x = new sequence(s, next);
-          if (!shown) {
-            cout << "n=" << n << " |F_i|<=" << w << " d=" << d << " t=" << x->length << ": " << *x << endl;
-            shown = true;
-          }
-          nxt.insert(x);
-        }
-        failure:;
+static bool shown = false;
+static vector<int> compatible;
+static set<sequence*,seq_cmp> cur, nxt;
+
+void generate_next(sequence * s, int next[w], int index, int start) {
+  for (uint i=start; i < compatible.size(); i++) {
+    next[index] = compatible[i];
+    for (int j=0; j<index; j++) {
+      // anti-chain check
+      if ((next[index] & ~next[j])==0 || (~next[index] & next[j])==0) goto failure;
+    }
+    /* else */
+    {
+      sequence * x = new sequence(s, next);
+      if (!shown) {
+        cout << "n=" << n << " |F_i|<=" << w << " d=" << d << " t=" << x->length << ": " << *x << endl;
+        shown = true;
       }
-      
-      if (s->refs == 0) {
-        delete s;
+      nxt.insert(x);
+      if (index+1<w) {
+        generate_next(s, next, index+1, i+1);
       }
     }
-    swap(cur,nxt);
-    nxt.clear();
+    failure:;
+  }
+  next[index]=0;
+};
+
+int main(int argc, const char *argv[]) {
+  for (int i=0; i<1; i++) {
+    {
+      sequence *s=new sequence();
+      s->prev[0] = (2<<i) - 1;
+      s->used |= s->prev[0];
+      s->length = 1;
+      cur.insert(s);
+    }
+    while (!cur.empty()) {
+      shown = false;
+      for (sequence* s : cur) {
+        compatible.clear();
+        
+        // Compute compatible subsets
+        for (int T=1; T<set_count; T++) {
+          if (__builtin_popcount(T)>d) continue;
+          if (get_bit(s->base, T)) continue;
+          int new_used = s->used | T;
+          if ((new_used & (new_used+1)) != 0) continue;
+          for (int i=0; i<w; i++) if (s->prev[i] == T) goto failure;
+          for (int i=0; i<base_count; i++) {
+            uint64_t m = s->base[i];
+            while (m) {
+              int R = __builtin_ctzll(m) + uint64_t_bits * i;
+              m &= m-1;
+              int j=0;
+              while (j<w && (R & T & ~s->prev[j])) j++;
+              if (j==w) goto failure;
+            }
+          }
+          compatible.push_back(T);
+          failure:;
+        }
+        
+        int next[w];
+        for (int j=0; j<w; j++) next[j]=0;
+        generate_next(s, next, 0, 0);
+
+        if (s->refs == 0) {
+          delete s;
+        }
+      }
+      swap(cur,nxt);
+      nxt.clear();
+    }
   }
   return 0;
 }
