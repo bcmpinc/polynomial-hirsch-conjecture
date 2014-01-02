@@ -56,9 +56,62 @@
 
 using namespace std;
 
-const int n=6;
+template<class T>
+struct pointer_cmp {
+  inline bool operator()(const T *a, const T *b) {
+    return *a < *b;
+  }
+};
+
+namespace robdd {
+  struct robdd;
+  std::set<const robdd*,pointer_cmp<robdd>> cache;
+  struct robdd {
+    int layer;
+    const robdd *one, *zero; // These pointers are required to be in the cache.
+    robdd() : layer(-1), one(NULL), zero(NULL) {};
+    robdd(int layer, const robdd *one, const robdd *zero) : layer(layer), one(one), zero(zero) {}
+    const robdd* intern() const {
+      // Returns a cached version of this robdd.
+      if (one == zero) return one;
+      auto it = cache.find(this);
+      if (it != cache.end()) return *it;
+      robdd * r = new robdd(*this);
+      cache.insert(r);
+      return r;
+    }
+    bool operator<(const robdd& b) const {
+      return memcmp(this, &b, sizeof(robdd)) < 0;
+    }
+  };
+
+  const robdd* FALSE((robdd*)0);
+  const robdd* TRUE((robdd*)1);
+  const robdd* And(const robdd *a, const robdd *b) {
+    // Shortcuts
+    if (a==FALSE || b==FALSE) return FALSE;
+    if (a==TRUE) return b;
+    if (b==TRUE) return a;
+    // Merge
+    if (a->layer<b->layer) return robdd(a->layer,And(a->one,b),And(a->zero,b)).intern();
+    if (a->layer>b->layer) return robdd(b->layer,And(a,b->one),And(a,b->zero)).intern();
+    return robdd(a->layer,And(a->one,b->one),And(a->zero,b->zero)).intern();
+  }
+  const robdd* Or(const robdd *a, const robdd *b) {
+    // Shortcuts
+    if (a==TRUE || b==TRUE) return TRUE;
+    if (a==FALSE) return b;
+    if (b==FALSE) return a;
+    // Merge
+    if (a->layer<b->layer) return robdd(a->layer,Or(a->one,b),Or(a->zero,b)).intern();
+    if (a->layer>b->layer) return robdd(b->layer,Or(a,b->one),Or(a,b->zero)).intern();
+    return robdd(a->layer,Or(a->one,b->one),Or(a->zero,b->zero)).intern();
+  }
+}
+
+const int n=5;
 const int w=2;
-const int d=2;
+const int d=3;
 
 const int set_count = 1<<n;
 
@@ -149,17 +202,11 @@ ostream& operator<<(ostream& o, const sequence &s) {
   return o;
 }
 
-struct seq_cmp {
-  inline bool operator()(const sequence *a, const sequence *b) {
-    return *a < *b;
-  }
-};
-
 static bool shown = false;
 static vector<int> compatible;
-static set<sequence*,seq_cmp> cur, nxt;
+static set<sequence*,pointer_cmp<sequence>> cur, nxt;
 
-void generate_next(sequence * s, int next[w], int index, int start) {
+void generate_next(sequence * s, int next[w], int index, int start, int used) {
   for (uint i=start; i < compatible.size(); i++) {
     next[index] = compatible[i];
     for (int j=0; j<index; j++) {
@@ -168,14 +215,18 @@ void generate_next(sequence * s, int next[w], int index, int start) {
     }
     /* else */
     {
-      sequence * x = new sequence(s, next);
-      if (!shown) {
-        cout << "n=" << n << " |F_i|<=" << w << " d=" << d << " t=" << x->length << ": " << *x << endl;
-        shown = true;
+      // Symmetry breaking on which numbers are introduced.
+      int mask = used | next[index];
+      if ((mask & (mask+1)) == 0) {
+        sequence * x = new sequence(s, next);
+        if (!shown) {
+          cout << "n=" << n << " |F_i|<=" << w << " d=" << d << " t=" << x->length << ": " << *x << endl;
+          shown = true;
+        }
+        nxt.insert(x);
       }
-      nxt.insert(x);
       if (index+1<w) {
-        generate_next(s, next, index+1, i+1);
+        generate_next(s, next, index+1, i+1, used | next[index]);
       }
     }
     failure:;
@@ -201,8 +252,6 @@ int main(int argc, const char *argv[]) {
         for (int T=1; T<set_count; T++) {
           if (__builtin_popcount(T)>d) continue;
           if (get_bit(s->base, T)) continue;
-          int new_used = s->used | T;
-          if ((new_used & (new_used+1)) != 0) continue;
           for (int i=0; i<w; i++) if (s->prev[i] == T) goto failure;
           for (int i=0; i<base_count; i++) {
             uint64_t m = s->base[i];
@@ -220,7 +269,7 @@ int main(int argc, const char *argv[]) {
         
         int next[w];
         for (int j=0; j<w; j++) next[j]=0;
-        generate_next(s, next, 0, 0);
+        generate_next(s, next, 0, 0, s->used);
 
         if (s->refs == 0) {
           delete s;
