@@ -129,26 +129,20 @@ struct sequence {
   }
 };
 
+const static char symbols[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 ostream& operator<<(ostream& o, const sequence &s) {
   if (s.tail) {
-    o << *s.tail << ",";
+    o << *s.tail << " ";
   }
   o << "{";
   for (int i=0; i<w; i++) {
     if (s.prev[i]!=0) {
       if (i>0) o << ",";
-      bool not_first = false;
-      o << "{";
       for (int j=0; j<n; j++) {
         if (s.prev[i] & (1<<j)) {
-          if (not_first) {
-            o << ",";
-          }
-          not_first = true;
-          o << j;
+          o << symbols[j];
         }
       }
-      o << "}";
     }
   }
   o << "}";
