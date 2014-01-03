@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
+#include <cassert>
 #include <cmath>
 #include <string>
 #include <iostream>
@@ -65,7 +66,7 @@ struct pointer_cmp {
 
 namespace robdd {
   struct robdd;
-  std::set<const robdd*,pointer_cmp<robdd>> cache;
+  set<const robdd*,pointer_cmp<robdd>> cache;
   struct robdd {
     int layer;
     const robdd *one, *zero; // These pointers are required to be in the cache.
@@ -87,7 +88,7 @@ namespace robdd {
 
   const robdd* FALSE((robdd*)0);
   const robdd* TRUE((robdd*)1);
-  std::map<std::pair<const robdd*,const robdd*>, const robdd*> and_cache;
+  map<pair<const robdd*,const robdd*>, const robdd*> and_cache;
   const robdd* And(const robdd *a, const robdd *b) {
     // Shortcuts
     if (a==FALSE || b==FALSE) return FALSE;
@@ -104,7 +105,7 @@ namespace robdd {
     and_cache[make_pair(a,b)] = r;
     return r;
   }
-  std::map<std::pair<const robdd*,const robdd*>, const robdd*> or_cache;
+  map<pair<const robdd*,const robdd*>, const robdd*> or_cache;
   const robdd* Or(const robdd *a, const robdd *b) {
     // Shortcuts
     if (a==TRUE || b==TRUE) return TRUE;
@@ -121,7 +122,7 @@ namespace robdd {
     or_cache[make_pair(a,b)] = r;
     return r;
   }
-  std::map<const robdd*, const robdd*> subset_cache;
+  map<const robdd*, const robdd*> subset_cache;
   const robdd* subset(const robdd* arg) {
     // (t,f) -> (t,t or f)
     if (arg==TRUE || arg==FALSE) return arg;
@@ -133,7 +134,7 @@ namespace robdd {
     subset_cache[arg] = r;
     return r;
   }
-  std::map<const robdd*, const robdd*> supset_cache;
+  map<const robdd*, const robdd*> supset_cache;
   const robdd* supset(const robdd* arg) {
     // (t,f) -> (t or f,f)
     if (arg==TRUE || arg==FALSE) return arg;
@@ -145,11 +146,24 @@ namespace robdd {
     supset_cache[arg] = r;
     return r;
   }
+  map<const robdd*, const robdd*> conj_cache;
+  const robdd* conj(const robdd* arg) {
+    // (t,f) -> (t or f,f)
+    if (arg==TRUE) return FALSE;
+    if (arg==FALSE) return TRUE;
+    auto it = conj_cache.find(arg);
+    if (it != conj_cache.end()) return it->second;
+    const robdd *r = robdd(arg->layer, conj(arg->one), conj(arg->zero)).intern();
+    conj_cache[arg] = r;
+    return r;
+  }
 }
 
-const int n=5;
-const int w=2;
-const int d=3;
+namespace param {
+  const int n=4;
+  const int w=2;
+  const int d=3;
+}
 
 bool check(const robdd::robdd* r, int s) {
   if (r==robdd::FALSE) return false;
@@ -159,7 +173,7 @@ bool check(const robdd::robdd* r, int s) {
 
 const robdd::robdd* construct(int s) {
   const robdd::robdd* r=robdd::TRUE;
-  for (int i=w-1; i>=0; i--) {
+  for (int i=param::n-1; i>=0; i--) {
     if (s&(1<<i)) 
       r = robdd::robdd(i, r, robdd::FALSE).intern();
     else
@@ -168,72 +182,47 @@ const robdd::robdd* construct(int s) {
   return r;
 }
 
-uint64_t hash_value(uint64_t x) {
-  x ^= x<<13;
-  x ^= x<<29;
-  return (x * (x * x * 15731 + 789221) + 1376312589) * 1234567891;
-}
-
-const int set_count = 1<<n;
-
-const int uint64_t_bits = sizeof(uint64_t)*8;
-const int base_count = (set_count + uint64_t_bits - 1) / uint64_t_bits;
-
-void set_bit(uint64_t * bitmap, int index) {
-  bitmap[index/uint64_t_bits] |= (1ULL<<(index%uint64_t_bits));
-}
-
-bool get_bit(uint64_t * bitmap, int index) {
-  return bitmap[index/uint64_t_bits] & (1ULL<<(index%uint64_t_bits));
-}
-
-struct sequence {
-  uint64_t base[base_count];
-  int prev[w];
-  uint64_t hash;
-  int length;
-  sequence * tail;
-  int refs;
-  int used;
+struct enumerate {
+  vector<int> result;
+  void search(const robdd::robdd * c, int depth, int value, int pop) {
+    if (pop > param::d) return;
+    if (c == robdd::FALSE) return;
+    if (c == robdd::TRUE?param::n:c->layer > depth) {
+      search(c, depth+1, value, pop);
+      search(c, depth+1, value | (1<<depth), pop + 1);
+    } else if (c == robdd::TRUE) {
+      result.push_back(value);
+    } else {
+      assert(c->layer == depth);
+      search(c->zero, depth+1, value, pop);
+      search(c->one,  depth+1, value | (1<<depth), pop + 1);
+    }
+  }
+  enumerate(const robdd::robdd * c) {
+    search(c,0,0,0);
+  }
+};
   
-  sequence() {
-    for(uint i=0; i<base_count; i++) base[i]=false;
-    for(int i=0; i<w; i++) prev[i]=0;
-    tail = NULL;
-    length = 0;
-    refs = 0;
-    hash = 0;
-    used = 0;
-  }
-  sequence(sequence * le_tail, int next[w]) {
-    memcpy(this, le_tail, sizeof(sequence));
-    tail = le_tail;
-    tail->refs++;
-    length++;
-    refs = 0;
-    for(int i=0; i<w; i++) {
-      hash ^= hash_value(prev[i]);
-      set_bit(base, prev[i]);
-      prev[i]=next[i];
-      used |= next[i];
-    }
-  }
+struct sequence {
+  const robdd::robdd * forbidden;
+  const robdd::robdd * prev;
+  sequence * tail;
+  int length;
+  int refs;
+  
+  sequence() : forbidden(robdd::FALSE), prev(robdd::FALSE), tail(NULL), length(0), refs(0) {}
+  sequence(sequence * tail, const robdd::robdd * next) : 
+    forbidden(robdd::Or(tail->forbidden,robdd::Or(next, robdd::supset(robdd::And(robdd::subset(tail->prev), robdd::conj(next)))))), 
+    prev(next), 
+    tail(tail), length(tail->length+1), refs(0) {}
   ~sequence() {
-    if (tail) {
-      tail->refs--;
-      if (tail->refs<=0) delete tail;
-    }
+    if (tail && --tail->refs) delete tail;
   }
   bool operator<(const sequence &b) const {
-    if (hash == b.hash) {
-      int i = memcmp(prev, b.prev, sizeof(prev));
-      if (i==0) {
-        i = memcmp(base, b.base, sizeof(base));
-        return i<0;
-      }
-      return i<0;
+    if (forbidden == b.forbidden) {
+      return prev < b.prev;
     }
-    return hash < b.hash;
+    return forbidden < b.forbidden;
   }
 };
 
@@ -243,13 +232,13 @@ ostream& operator<<(ostream& o, const sequence &s) {
     o << *s.tail << " ";
   }
   o << "{";
-  for (int i=0; i<w; i++) {
-    if (s.prev[i]!=0) {
-      if (i>0) o << ",";
-      for (int j=0; j<n; j++) {
-        if (s.prev[i] & (1<<j)) {
-          o << symbols[j];
-        }
+  bool not_first = false;
+  for (int i : enumerate(s.prev).result) {
+    if (not_first) o << ",";
+    not_first = true;
+    for (int j=0; j<param::n; j++) {
+      if (i & (1<<j)) {
+        o << symbols[j];
       }
     }
   }
@@ -257,82 +246,42 @@ ostream& operator<<(ostream& o, const sequence &s) {
   return o;
 }
 
-static bool shown = false;
-static vector<int> compatible;
 static set<sequence*,pointer_cmp<sequence>> cur, nxt;
-
-void generate_next(sequence * s, int next[w], int index, int start, int used) {
-  for (uint i=start; i < compatible.size(); i++) {
-    next[index] = compatible[i];
-    for (int j=0; j<index; j++) {
-      // anti-chain check
-      if ((next[index] & ~next[j])==0 || (~next[index] & next[j])==0) goto failure;
+static sequence * seq;
+void generate_next(const vector<const robdd::robdd *> &old_compatible, const robdd::robdd * old_next, const robdd::robdd * not_anti, int depth) {
+  vector<const robdd::robdd *> compatible;
+  for (const robdd::robdd * c : old_compatible) {
+    if (robdd::And(not_anti, c) != robdd::FALSE) continue; // Skip those elements that would violate the anti-chain.
+    const robdd::robdd * next = robdd::Or(old_next, c); // Compute the new next set
+    sequence * x = new sequence(seq, next); // Create new sequence
+    if (nxt.empty()) { // Print if the first
+      cout << "n=" << param::n << " |F_i|<=" << param::w << " d=" << param::d << " t=" << x->length << ": " << *x << endl;
     }
-    /* else */
-    {
-      // Symmetry breaking on which numbers are introduced.
-      int mask = used | next[index];
-      if ((mask & (mask+1)) == 0) {
-        sequence * x = new sequence(s, next);
-        if (!shown) {
-          cout << "n=" << n << " |F_i|<=" << w << " d=" << d << " t=" << x->length << ": " << *x << endl;
-          shown = true;
-        }
-        nxt.insert(x);
-      }
-      if (index+1<w) {
-        generate_next(s, next, index+1, i+1, used | next[index]);
-      }
+    nxt.insert(x); // Insert into the nxt set
+    if (depth < param::w) { // If still allowed, recurse
+      generate_next(compatible, next, robdd::Or(not_anti,robdd::Or(robdd::subset(c),robdd::supset(c))), depth+1);
     }
-    failure:;
+    compatible.push_back(c); // Track elements that can be chosen in a recursive call
   }
-  next[index]=0;
 };
 
 int main(int argc, const char *argv[]) {
-  for (int i=0; i<1; i++) {
-    {
-      sequence *s=new sequence();
-      s->prev[0] = (2<<i) - 1;
-      s->used |= s->prev[0];
-      s->length = 1;
-      cur.insert(s);
-    }
-    while (!cur.empty()) {
-      shown = false;
-      for (sequence* s : cur) {
-        compatible.clear();
-        
-        // Compute compatible subsets
-        for (int T=1; T<set_count; T++) {
-          if (__builtin_popcount(T)>d) continue;
-          if (get_bit(s->base, T)) continue;
-          for (int i=0; i<w; i++) if (s->prev[i] == T) goto failure;
-          for (int i=0; i<base_count; i++) {
-            uint64_t m = s->base[i];
-            while (m) {
-              int R = __builtin_ctzll(m) + uint64_t_bits * i;
-              m &= m-1;
-              int j=0;
-              while (j<w && (R & T & ~s->prev[j])) j++;
-              if (j==w) goto failure;
-            }
-          }
-          compatible.push_back(T);
-          failure:;
-        }
-        
-        int next[w];
-        for (int j=0; j<w; j++) next[j]=0;
-        generate_next(s, next, 0, 0, s->used);
-
-        if (s->refs == 0) {
-          delete s;
-        }
+  sequence* root = new sequence;
+  for (int i=0; i<param::n; i++) {
+    cur.insert(new sequence(root, construct((2<<i)-1)));
+  }
+  while (!cur.empty()) {
+    for (sequence * s : cur) {
+      seq = s;
+      vector<const robdd::robdd *> compatible;
+      for (int i : enumerate(robdd::conj(seq->forbidden)).result) {
+        compatible.push_back(construct(i));
       }
-      swap(cur,nxt);
-      nxt.clear();
+      generate_next(compatible, robdd::FALSE, robdd::FALSE, 1);
+      if (seq->refs == 0) delete s;
     }
+    swap(cur,nxt);
+    nxt.clear();
   }
   return 0;
 }
