@@ -272,7 +272,9 @@ void generate_next(const vector<const robdd::robdd *> &old_compatible, const rob
       if (param::d>=param::n) cout << "n"; else cout << param::d;
       cout << " t=" << x->length << ": " << *x << endl;
     }
-    nxt.insert(x); // Insert into the nxt set
+    if (!nxt.insert(x).second) { // Insert into the nxt set
+      delete x; // It already existed in the set.
+    }
     if (depth < param::w) { // If still allowed, recurse
       generate_next(compatible, next, robdd::Or(not_anti,robdd::Or(robdd::subset(c),robdd::supset(c))), depth+1);
     }
