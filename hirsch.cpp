@@ -14,9 +14,9 @@
 #include <map>
 #include <set>
 
-#define NDEBUG
+// #define NDEBUG
 namespace param {
-  const int n=6;
+  const int n=4;
   const int w=2;
   const int d=3;
 }
@@ -74,7 +74,6 @@ struct pointer_cmp {
 };
 
 namespace robdd {
-  uint64_t counter=0;
   struct robdd;
   set<const robdd*,pointer_cmp<robdd>> cache;
   struct robdd {
@@ -88,8 +87,8 @@ namespace robdd {
       auto it = cache.find(this);
       if (it != cache.end()) return *it;
       robdd * r = new robdd(*this);
-      cache.insert(r);
-      counter++;
+      bool added = cache.insert(r).second;
+      assert(added);
       return r;
     }
     bool operator<(const robdd& b) const {
@@ -98,6 +97,7 @@ namespace robdd {
       return layer < b.layer;
     }
   };
+  void clear_cache() {for (const robdd* r : cache) delete r; cache.clear();}
 
   const robdd* FALSE((robdd*)0);
   const robdd* TRUE((robdd*)1);
@@ -218,14 +218,16 @@ struct sequence {
   int length;
   int refs;
   
-  sequence() : forbidden(precomputed_subset[0]), prev(forbidden), tail(NULL), length(0), refs(0) {}
+  sequence() : forbidden(precomputed_subset[0]), prev(forbidden), tail(NULL), length(0), refs(1) {}
   sequence(sequence * tail, const robdd::robdd * next) : 
     forbidden(robdd::Or(tail->forbidden,robdd::Or(next, robdd::supset(robdd::And(robdd::subset(tail->prev), robdd::conj(robdd::subset(next))))))), 
     prev(next), 
-    tail(tail), length(tail->length+1), refs(0) {++tail->refs;}
+    tail(tail), length(tail->length+1), refs(1) {tail->ref();}
   ~sequence() {
-    if (tail && --tail->refs == 0) delete tail;
+    if (tail) tail->unref();
   }
+  void ref() {++refs;}
+  void unref() {if(--refs==0) delete this;}
   bool operator<(const sequence &b) const {
     if (forbidden == b.forbidden) {
       return prev < b.prev;
@@ -273,7 +275,7 @@ void generate_next(const vector<const robdd::robdd *> &old_compatible, const rob
       cout << " t=" << x->length << ": " << *x << endl;
     }
     if (!nxt.insert(x).second) { // Insert into the nxt set
-      delete x; // It already existed in the set.
+      x->unref(); // It already existed in the set.
     }
     if (depth < param::w) { // If still allowed, recurse
       generate_next(compatible, next, robdd::Or(not_anti,robdd::Or(robdd::subset(c),robdd::supset(c))), depth+1);
@@ -323,11 +325,14 @@ int main(int argc, const char *argv[]) {
         compatible.push_back(r);
       }
       generate_next(compatible, robdd::FALSE, robdd::FALSE, 1);
-      if (seq->refs == 0) delete s;
+      seq->unref();
     }
     swap(cur,nxt);
     nxt.clear();
   }
-  cout << "Generated robdd nodes:" << robdd::counter << endl;
+  cout << "Generated robdd nodes:" << robdd::cache.size() << endl;
+  // make memchecker happy :)
+  robdd::clear_cache();
+  root->unref();
   return 0;
 }
