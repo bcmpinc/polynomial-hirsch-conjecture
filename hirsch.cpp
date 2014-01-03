@@ -87,25 +87,63 @@ namespace robdd {
 
   const robdd* FALSE((robdd*)0);
   const robdd* TRUE((robdd*)1);
+  std::map<std::pair<const robdd*,const robdd*>, const robdd*> and_cache;
   const robdd* And(const robdd *a, const robdd *b) {
     // Shortcuts
     if (a==FALSE || b==FALSE) return FALSE;
     if (a==TRUE) return b;
     if (b==TRUE) return a;
+    if (a>b) swap(a,b); // Remove element order from pair.
+    auto it = and_cache.find(make_pair(a,b));
+    if (it != and_cache.end()) return it->second;
     // Merge
-    if (a->layer<b->layer) return robdd(a->layer,And(a->one,b),And(a->zero,b)).intern();
-    if (a->layer>b->layer) return robdd(b->layer,And(a,b->one),And(a,b->zero)).intern();
-    return robdd(a->layer,And(a->one,b->one),And(a->zero,b->zero)).intern();
+    const robdd *r;
+    if (a->layer<b->layer) r = robdd(a->layer,And(a->one,b),And(a->zero,b)).intern(); else
+    if (a->layer>b->layer) r = robdd(b->layer,And(a,b->one),And(a,b->zero)).intern(); else
+    r = robdd(a->layer,And(a->one,b->one),And(a->zero,b->zero)).intern();
+    and_cache[make_pair(a,b)] = r;
+    return r;
   }
+  std::map<std::pair<const robdd*,const robdd*>, const robdd*> or_cache;
   const robdd* Or(const robdd *a, const robdd *b) {
     // Shortcuts
     if (a==TRUE || b==TRUE) return TRUE;
     if (a==FALSE) return b;
     if (b==FALSE) return a;
+    if (a>b) swap(a,b); // Remove element order from pair.
+    auto it = or_cache.find(make_pair(a,b));
+    if (it != or_cache.end()) return it->second;
     // Merge
-    if (a->layer<b->layer) return robdd(a->layer,Or(a->one,b),Or(a->zero,b)).intern();
-    if (a->layer>b->layer) return robdd(b->layer,Or(a,b->one),Or(a,b->zero)).intern();
-    return robdd(a->layer,Or(a->one,b->one),Or(a->zero,b->zero)).intern();
+    const robdd *r;
+    if (a->layer<b->layer) r = robdd(a->layer,Or(a->one,b),Or(a->zero,b)).intern(); else
+    if (a->layer>b->layer) r = robdd(b->layer,Or(a,b->one),Or(a,b->zero)).intern(); else
+    r = robdd(a->layer,Or(a->one,b->one),Or(a->zero,b->zero)).intern();
+    or_cache[make_pair(a,b)] = r;
+    return r;
+  }
+  std::map<const robdd*, const robdd*> subset_cache;
+  const robdd* subset(const robdd* arg) {
+    // (t,f) -> (t,t or f)
+    if (arg==TRUE || arg==FALSE) return arg;
+    auto it = subset_cache.find(arg);
+    if (it != subset_cache.end()) return it->second;
+    const robdd *r;
+    r = subset(arg->one);
+    r = robdd(arg->layer, r,Or(r,subset(arg->zero))).intern();
+    subset_cache[arg] = r;
+    return r;
+  }
+  std::map<const robdd*, const robdd*> supset_cache;
+  const robdd* supset(const robdd* arg) {
+    // (t,f) -> (t or f,f)
+    if (arg==TRUE || arg==FALSE) return arg;
+    auto it = subset_cache.find(arg);
+    if (it != subset_cache.end()) return it->second;
+    const robdd *r;
+    r = supset(arg->zero);
+    r = robdd(arg->layer, Or(supset(arg->one), r), r).intern();
+    supset_cache[arg] = r;
+    return r;
   }
 }
 
