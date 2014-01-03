@@ -151,13 +151,30 @@ const int n=5;
 const int w=2;
 const int d=3;
 
-const int set_count = 1<<n;
+bool check(const robdd::robdd* r, int s) {
+  if (r==robdd::FALSE) return false;
+  if (r==robdd::TRUE) return true;
+  return check((s&(1<<r->layer))?r->one:r->zero, s);
+}
+
+const robdd::robdd* construct(int s) {
+  const robdd::robdd* r=robdd::TRUE;
+  for (int i=w-1; i>=0; i--) {
+    if (s&(1<<i)) 
+      r = robdd::robdd(i, r, robdd::FALSE).intern();
+    else
+      r = robdd::robdd(i, robdd::FALSE, r).intern();
+  }
+  return r;
+}
 
 uint64_t hash_value(uint64_t x) {
   x ^= x<<13;
   x ^= x<<29;
   return (x * (x * x * 15731 + 789221) + 1376312589) * 1234567891;
 }
+
+const int set_count = 1<<n;
 
 const int uint64_t_bits = sizeof(uint64_t)*8;
 const int base_count = (set_count + uint64_t_bits - 1) / uint64_t_bits;
