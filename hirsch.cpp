@@ -14,10 +14,11 @@
 #include <map>
 #include <set>
 
+#define NDEBUG
 namespace param {
-  const int n=4;
+  const int n=6;
   const int w=2;
-  const int d=n;
+  const int d=3;
 }
 
 /** Definition 1: sequence
@@ -177,7 +178,8 @@ bool check(const robdd::robdd* r, int s) {
   return check((s&(1<<r->layer))?r->one:r->zero, s);
 }
 
-const robdd::robdd* construct(int s) {
+static const robdd::robdd * precomputed_subset[1<<param::n];
+const robdd::robdd * construct(int s) {
   const robdd::robdd* r=robdd::TRUE;
   for (int i=param::n-1; i>=0; i--) {
     if (s&(1<<i)) 
@@ -216,7 +218,7 @@ struct sequence {
   int length;
   int refs;
   
-  sequence() : forbidden(construct(0)), prev(forbidden), tail(NULL), length(0), refs(0) {}
+  sequence() : forbidden(precomputed_subset[0]), prev(forbidden), tail(NULL), length(0), refs(0) {}
   sequence(sequence * tail, const robdd::robdd * next) : 
     forbidden(robdd::Or(tail->forbidden,robdd::Or(next, robdd::supset(robdd::And(robdd::subset(tail->prev), robdd::conj(robdd::subset(next))))))), 
     prev(next), 
@@ -280,17 +282,17 @@ void generate_next(const vector<const robdd::robdd *> &old_compatible, const rob
 
 void tests() {
   if (param::n==4) {
-    cout << enumerate(construct(11)) << " = {013}" << endl;
-    cout << enumerate(robdd::subset(construct(5))) << " = {-,2,0,02}" << endl;
-    cout << enumerate(robdd::supset(construct(13))) << " = {023,0123}" << endl;
-    const robdd::robdd * c = robdd::Or(construct(13),construct(10));
+    cout << enumerate(precomputed_subset[11]) << " = {013}" << endl;
+    cout << enumerate(robdd::subset(precomputed_subset[5])) << " = {-,2,0,02}" << endl;
+    cout << enumerate(robdd::supset(precomputed_subset[13])) << " = {023,0123}" << endl;
+    const robdd::robdd * c = robdd::Or(precomputed_subset[13],precomputed_subset[10]);
     cout << enumerate(c) << " = {13,023}" << endl;
     cout << enumerate(subset(c)) << " = {-,3,2,23,1,13,0,03,02,023}" << endl;
     cout << enumerate(supset(c)) << " = {13,123,023,013,0123}" << endl;
   }
   if (param::n==5) {
-    const robdd::robdd * prev = robdd::Or(construct(14),construct(21));
-    const robdd::robdd * next = robdd::Or(construct(13),construct(22));
+    const robdd::robdd * prev = robdd::Or(precomputed_subset[14],precomputed_subset[21]);
+    const robdd::robdd * next = robdd::Or(precomputed_subset[13],precomputed_subset[22]);
     cout << enumerate(prev) << " = {123,024}" << endl;
     cout << enumerate(next) << " = {023,124}" << endl;
     cout << enumerate(robdd::And(robdd::subset(prev), robdd::conj(robdd::subset(next)))) << " = {13,04}" << endl;
@@ -298,17 +300,23 @@ void tests() {
 }
 
 int main(int argc, const char *argv[]) {
+  for (int i=0; i<(1<<param::n); i++) {
+    precomputed_subset[i] = construct(i);
+  }
+  cout << "Subsets precomputed." << endl;
+#ifndef NDEBUG
   tests();
+#endif
   sequence* root = new sequence;
   for (int i=0; i<param::n; i++) {
-    cur.insert(new sequence(root, construct((2<<i)-1)));
+    cur.insert(new sequence(root, precomputed_subset[(2<<i)-1]));
   }
   while (!cur.empty()) {
     for (sequence * s : cur) {
       seq = s;
       vector<const robdd::robdd *> compatible;
       for (int i : enumerate(robdd::conj(seq->forbidden)).result) {
-        const robdd::robdd * r = construct(i);
+        const robdd::robdd * r = precomputed_subset[i];
         assert(robdd::And(seq->forbidden, r) == robdd::FALSE);
         compatible.push_back(r);
       }
