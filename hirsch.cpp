@@ -14,6 +14,12 @@
 #include <map>
 #include <set>
 
+namespace param {
+  const int n=4;
+  const int w=2;
+  const int d=n;
+}
+
 /** Definition 1: sequence
  * A sequence is F_1,...,F_t subset powerset({0,...,n-1}), with 
  * F_1,...,F_t disjoint and
@@ -67,6 +73,7 @@ struct pointer_cmp {
 };
 
 namespace robdd {
+  uint64_t counter=0;
   struct robdd;
   set<const robdd*,pointer_cmp<robdd>> cache;
   struct robdd {
@@ -81,6 +88,7 @@ namespace robdd {
       if (it != cache.end()) return *it;
       robdd * r = new robdd(*this);
       cache.insert(r);
+      counter++;
       return r;
     }
     bool operator<(const robdd& b) const {
@@ -142,8 +150,8 @@ namespace robdd {
   const robdd* supset(const robdd* arg) {
     // (t,f) -> (t or f,f)
     if (arg==TRUE || arg==FALSE) return arg;
-    auto it = subset_cache.find(arg);
-    if (it != subset_cache.end()) return it->second;
+    auto it = supset_cache.find(arg);
+    if (it != supset_cache.end()) return it->second;
     const robdd *r;
     r = supset(arg->zero);
     r = robdd(arg->layer, Or(supset(arg->one), r), r).intern();
@@ -161,12 +169,6 @@ namespace robdd {
     conj_cache[arg] = r;
     return r;
   }
-}
-
-namespace param {
-  const int n=4;
-  const int w=2;
-  const int d=3;
 }
 
 bool check(const robdd::robdd* r, int s) {
@@ -214,9 +216,9 @@ struct sequence {
   int length;
   int refs;
   
-  sequence() : forbidden(construct(0)), prev(robdd::FALSE), tail(NULL), length(0), refs(0) {}
+  sequence() : forbidden(construct(0)), prev(forbidden), tail(NULL), length(0), refs(0) {}
   sequence(sequence * tail, const robdd::robdd * next) : 
-    forbidden(robdd::Or(tail->forbidden,robdd::Or(next, robdd::supset(robdd::And(robdd::subset(tail->prev), robdd::conj(next)))))), 
+    forbidden(robdd::Or(tail->forbidden,robdd::Or(next, robdd::supset(robdd::And(robdd::subset(tail->prev), robdd::conj(robdd::subset(next))))))), 
     prev(next), 
     tail(tail), length(tail->length+1), refs(0) {++tail->refs;}
   ~sequence() {
@@ -231,15 +233,13 @@ struct sequence {
 };
 
 const static char symbols[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-ostream& operator<<(ostream& o, const sequence &s) {
-  if (s.tail) {
-    o << *s.tail << " ";
-  }
+ostream& operator<<(ostream& o, const enumerate &e) {
   o << "{";
   bool not_first = false;
-  for (int i : enumerate(s.prev).result) {
+  for (int i : e.result) {
     if (not_first) o << ",";
     not_first = true;
+    if (i==0) o << "-"; else
     for (int j=0; j<param::n; j++) {
       if (i & (1<<j)) {
         o << symbols[j];
@@ -248,6 +248,12 @@ ostream& operator<<(ostream& o, const sequence &s) {
   }
   o << "}";
   return o;
+}
+ostream& operator<<(ostream& o, const sequence &s) {
+  if (s.tail) {
+    o << *s.tail << " ";
+  }
+  return o << enumerate(s.prev);
 }
 
 static set<sequence*,pointer_cmp<sequence>> cur, nxt;
@@ -258,8 +264,11 @@ void generate_next(const vector<const robdd::robdd *> &old_compatible, const rob
     if (robdd::And(not_anti, c) != robdd::FALSE) continue; // Skip those elements that would violate the anti-chain.
     const robdd::robdd * next = robdd::Or(old_next, c); // Compute the new next set
     sequence * x = new sequence(seq, next); // Create new sequence
+    assert(robdd::And(x->forbidden, next) == next);
     if (nxt.empty()) { // Print if the first
-      cout << "n=" << param::n << " |F_i|<=" << param::w << " d=" << param::d << " t=" << x->length << ": " << *x << endl;
+      cout << "n=" << param::n << " |F_i|<=" << param::w << " d=";
+      if (param::d>=param::n) cout << "n"; else cout << param::d;
+      cout << " t=" << x->length << ": " << *x << endl;
     }
     nxt.insert(x); // Insert into the nxt set
     if (depth < param::w) { // If still allowed, recurse
@@ -269,7 +278,27 @@ void generate_next(const vector<const robdd::robdd *> &old_compatible, const rob
   }
 };
 
+void tests() {
+  if (param::n==4) {
+    cout << enumerate(construct(11)) << " = {013}" << endl;
+    cout << enumerate(robdd::subset(construct(5))) << " = {-,2,0,02}" << endl;
+    cout << enumerate(robdd::supset(construct(13))) << " = {023,0123}" << endl;
+    const robdd::robdd * c = robdd::Or(construct(13),construct(10));
+    cout << enumerate(c) << " = {13,023}" << endl;
+    cout << enumerate(subset(c)) << " = {-,3,2,23,1,13,0,03,02,023}" << endl;
+    cout << enumerate(supset(c)) << " = {13,123,023,013,0123}" << endl;
+  }
+  if (param::n==5) {
+    const robdd::robdd * prev = robdd::Or(construct(14),construct(21));
+    const robdd::robdd * next = robdd::Or(construct(13),construct(22));
+    cout << enumerate(prev) << " = {123,024}" << endl;
+    cout << enumerate(next) << " = {023,124}" << endl;
+    cout << enumerate(robdd::And(robdd::subset(prev), robdd::conj(robdd::subset(next)))) << " = {13,04}" << endl;
+  }
+}
+
 int main(int argc, const char *argv[]) {
+  tests();
   sequence* root = new sequence;
   for (int i=0; i<param::n; i++) {
     cur.insert(new sequence(root, construct((2<<i)-1)));
@@ -279,7 +308,9 @@ int main(int argc, const char *argv[]) {
       seq = s;
       vector<const robdd::robdd *> compatible;
       for (int i : enumerate(robdd::conj(seq->forbidden)).result) {
-        compatible.push_back(construct(i));
+        const robdd::robdd * r = construct(i);
+        assert(robdd::And(seq->forbidden, r) == robdd::FALSE);
+        compatible.push_back(r);
       }
       generate_next(compatible, robdd::FALSE, robdd::FALSE, 1);
       if (seq->refs == 0) delete s;
@@ -287,5 +318,6 @@ int main(int argc, const char *argv[]) {
     swap(cur,nxt);
     nxt.clear();
   }
+  cout << "Generated robdd nodes:" << robdd::counter << endl;
   return 0;
 }
