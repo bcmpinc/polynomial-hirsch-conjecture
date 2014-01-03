@@ -60,6 +60,8 @@ using namespace std;
 template<class T>
 struct pointer_cmp {
   inline bool operator()(const T *a, const T *b) {
+    assert(a);
+    assert(b);
     return *a < *b;
   }
 };
@@ -68,10 +70,10 @@ namespace robdd {
   struct robdd;
   set<const robdd*,pointer_cmp<robdd>> cache;
   struct robdd {
-    int layer;
     const robdd *one, *zero; // These pointers are required to be in the cache.
-    robdd() : layer(-1), one(NULL), zero(NULL) {};
-    robdd(int layer, const robdd *one, const robdd *zero) : layer(layer), one(one), zero(zero) {}
+    int layer;
+    robdd() : one(NULL), zero(NULL), layer(-1) {};
+    robdd(int layer, const robdd *one, const robdd *zero) : one(one), zero(zero), layer(layer) {}
     const robdd* intern() const {
       // Returns a cached version of this robdd.
       if (one == zero) return one;
@@ -82,7 +84,9 @@ namespace robdd {
       return r;
     }
     bool operator<(const robdd& b) const {
-      return memcmp(this, &b, sizeof(robdd)) < 0;
+      if (one != b.one) return one < b.one;
+      if (zero != b.zero) return zero < b.zero;
+      return layer < b.layer;
     }
   };
 
@@ -187,7 +191,7 @@ struct enumerate {
   void search(const robdd::robdd * c, int depth, int value, int pop) {
     if (pop > param::d) return;
     if (c == robdd::FALSE) return;
-    if (c == robdd::TRUE?param::n:c->layer > depth) {
+    if ((c == robdd::TRUE?param::n:c->layer) > depth) {
       search(c, depth+1, value, pop);
       search(c, depth+1, value | (1<<depth), pop + 1);
     } else if (c == robdd::TRUE) {
@@ -210,13 +214,13 @@ struct sequence {
   int length;
   int refs;
   
-  sequence() : forbidden(robdd::FALSE), prev(robdd::FALSE), tail(NULL), length(0), refs(0) {}
+  sequence() : forbidden(construct(0)), prev(robdd::FALSE), tail(NULL), length(0), refs(0) {}
   sequence(sequence * tail, const robdd::robdd * next) : 
     forbidden(robdd::Or(tail->forbidden,robdd::Or(next, robdd::supset(robdd::And(robdd::subset(tail->prev), robdd::conj(next)))))), 
     prev(next), 
-    tail(tail), length(tail->length+1), refs(0) {}
+    tail(tail), length(tail->length+1), refs(0) {++tail->refs;}
   ~sequence() {
-    if (tail && --tail->refs) delete tail;
+    if (tail && --tail->refs == 0) delete tail;
   }
   bool operator<(const sequence &b) const {
     if (forbidden == b.forbidden) {
