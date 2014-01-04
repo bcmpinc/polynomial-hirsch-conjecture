@@ -14,9 +14,9 @@
 #include <map>
 #include <set>
 
-// #define NDEBUG
+//#define NDEBUG
 namespace param {
-  const int n=4;
+  const int n=7;
   const int w=2;
   const int d=3;
 }
@@ -170,6 +170,54 @@ namespace robdd {
     conj_cache[arg] = r;
     return r;
   }
+  map<const robdd*, pair<int, int>> sat_count_cache;
+  pair<int, int> sat_count(const robdd* arg) {
+    if (arg==TRUE) return make_pair(1,param::n);
+    if (arg==FALSE) return make_pair(0,param::n);
+    auto it = sat_count_cache.find(arg);
+    if (it != sat_count_cache.end()) return it->second;
+    auto cnt_one  = sat_count(arg->one);
+    auto cnt_zero = sat_count(arg->zero);
+    auto r = make_pair((cnt_one.first<<(cnt_one.second-arg->layer-1))+(cnt_zero.first<<(cnt_zero.second-arg->layer-1)),arg->layer);
+    sat_count_cache[arg] = r;
+    return r;
+  }
+  struct permutator {
+    pair<int,int> var[param::n];
+    void sort() {std::sort(var, var+param::n);}
+    map<const robdd*, const robdd*> permute_cache;
+    const robdd* permute(const robdd* org, int index) {
+      if (org==TRUE) return TRUE;
+      if (org==FALSE) return FALSE;
+      if (index>=param::n) return TRUE;
+      auto it = permute_cache.find(org);
+      if (it != permute_cache.end()) return it->second;
+      const robdd* r = robdd(index,
+        permute(And(robdd(var[index].second,TRUE,FALSE).intern(), org), index+1),
+        permute(And(robdd(var[index].second,FALSE,TRUE).intern(), org), index+1)
+      ).intern();
+      permute_cache[org] = r;
+      return r;
+    }
+  };
+  map<const robdd*, const robdd*> canonicalize_cache;
+  const robdd* canonicalize(const robdd* arg) {
+    if (arg==TRUE || arg==FALSE) return arg;
+    auto it = canonicalize_cache.find(arg);
+    if (it != canonicalize_cache.end()) return it->second;
+    // Compute permutation
+    permutator perm;
+    for (int i=0; i<param::n; i++) {
+      auto count = sat_count(And(arg, robdd(i,TRUE,FALSE).intern()));
+      perm.var[i] = make_pair(count.first << count.second, i);
+    }
+    perm.sort();
+    // Compute result
+    const robdd* r = perm.permute(arg, 0);
+    canonicalize_cache[arg] = r;
+    return r;
+  }
+
 }
 
 bool check(const robdd::robdd* r, int s) {
@@ -229,10 +277,10 @@ struct sequence {
   void ref() {++refs;}
   void unref() {if(--refs==0) delete this;}
   bool operator<(const sequence &b) const {
-    if (forbidden == b.forbidden) {
+    /*if (forbidden == b.forbidden) {
       return prev < b.prev;
-    }
-    return forbidden < b.forbidden;
+    }*/
+    return robdd::canonicalize(forbidden) < robdd::canonicalize(b.forbidden);
   }
 };
 
@@ -300,6 +348,12 @@ void tests() {
     cout << enumerate(prev) << " = {123,024}" << endl;
     cout << enumerate(next) << " = {023,124}" << endl;
     cout << enumerate(robdd::And(robdd::subset(prev), robdd::conj(robdd::subset(next)))) << " = {13,04}" << endl;
+    cout << enumerate(robdd::canonicalize(prev)) << endl;
+    cout << enumerate(robdd::canonicalize(next)) << endl;
+    cout << enumerate(robdd::canonicalize(robdd::supset(prev))) << endl;
+    cout << enumerate(robdd::canonicalize(robdd::supset(next))) << endl;
+    cout << enumerate(robdd::canonicalize(robdd::subset(prev))) << endl;
+    cout << enumerate(robdd::canonicalize(robdd::subset(next))) << endl;
   }
 }
 
@@ -308,14 +362,13 @@ int main(int argc, const char *argv[]) {
     precomputed_subset[i] = construct(i);
   }
   cout << "Subsets precomputed." << endl;
-#ifndef NDEBUG
-  tests();
-#endif
+  //tests();
   sequence* root = new sequence;
   for (int i=0; i<param::n; i++) {
     cur.insert(new sequence(root, precomputed_subset[(2<<i)-1]));
   }
   while (!cur.empty()) {
+    cout << "Cache: " << cur.size() << endl;
     for (sequence * s : cur) {
       seq = s;
       vector<const robdd::robdd *> compatible;
