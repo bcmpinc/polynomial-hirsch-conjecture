@@ -14,6 +14,8 @@
 #include <map>
 #include <set>
 
+using namespace std;
+
 //#define NDEBUG
 namespace param {
   const int n=7;
@@ -61,8 +63,6 @@ namespace param {
 /** Conjecture 1: fixed F_1
  * F_1 = {{0}}
  */
-
-using namespace std;
 
 template<class T>
 struct pointer_cmp {

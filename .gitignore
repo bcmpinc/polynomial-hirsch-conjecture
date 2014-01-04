@@ -1,3 +1,7 @@
+# Hidden and backup files
+*~
+.*
+
 # Compiled Object files
 *.slo
 *.lo
