@@ -18,9 +18,9 @@ using namespace std;
 
 //#define NDEBUG
 namespace param {
-  const int n=7;
+  const int n=5;
   const int w=2;
-  const int d=3;
+  const int d=n;
 }
 
 /** Definition 1: sequence
@@ -70,6 +70,14 @@ struct pointer_cmp {
     assert(a);
     assert(b);
     return *a < *b;
+  }
+};
+template<class T>
+struct index_cmp {
+  const T* array;
+  index_cmp(const T* array) : array(array) {}
+  inline bool operator()(int a, int b) {
+    return array[a] < array[b];
   }
 };
 
@@ -183,9 +191,11 @@ namespace robdd {
     return r;
   }
   struct permutator {
-    pair<int,int> var[param::n];
-    void sort() {std::sort(var, var+param::n);}
+    int var[param::n];
     map<const robdd*, const robdd*> permute_cache;
+    permutator() {for (int i=0; i<param::n; i++) var[i]=i;}
+    template<class T>
+    void sort(T* sort_key) {std::sort(var,var+param::n,index_cmp<T>(sort_key));}
     const robdd* permute(const robdd* org, int index) {
       if (org==TRUE) return TRUE;
       if (org==FALSE) return FALSE;
@@ -193,31 +203,66 @@ namespace robdd {
       auto it = permute_cache.find(org);
       if (it != permute_cache.end()) return it->second;
       const robdd* r = robdd(index,
-        permute(And(robdd(var[index].second,TRUE,FALSE).intern(), org), index+1),
-        permute(And(robdd(var[index].second,FALSE,TRUE).intern(), org), index+1)
+        permute(And(robdd(var[index],TRUE,FALSE).intern(), org), index+1),
+        permute(And(robdd(var[index],FALSE,TRUE).intern(), org), index+1)
       ).intern();
       permute_cache[org] = r;
       return r;
     }
   };
+  int get_element(const robdd* c) {
+    if (c==FALSE) return -1;
+    int r=0;
+    while (c!=TRUE) {
+      assert(c!=FALSE);
+      if (c->zero != FALSE) {
+        c = c->zero;
+      } else {
+        r += 1<<(param::n-c->layer-1);
+        c = c->one;
+      }
+    }
+    return r;
+  }
+  int get_non_element(const robdd* c) {
+    if (c==FALSE) return -1;
+    int r=0;
+    while (c!=TRUE) {
+      assert(c!=FALSE);
+      if (c->zero != FALSE) {
+        r += 1<<(param::n-c->layer-1);
+        c = c->zero;
+      } else {
+        c = c->one;
+      }
+    }
+    return r;
+  }
   map<const robdd*, const robdd*> canonicalize_cache;
   const robdd* canonicalize(const robdd* arg) {
     if (arg==TRUE || arg==FALSE) return arg;
     auto it = canonicalize_cache.find(arg);
     if (it != canonicalize_cache.end()) return it->second;
+    typedef tuple<int,int,int,int> KEY;
+    KEY sort_key[param::n];
     // Compute permutation
-    permutator perm;
     for (int i=0; i<param::n; i++) {
-      auto count = sat_count(And(arg, robdd(i,TRUE,FALSE).intern()));
-      perm.var[i] = make_pair(count.first << count.second, i);
+      const robdd * v = And(arg, robdd(i,TRUE,FALSE).intern());
+      auto count = sat_count(v);
+      sort_key[i] = KEY(count.first << count.second, get_non_element(v), get_element(v), i);
     }
-    perm.sort();
+    permutator perm;
+    perm.sort(sort_key);
     // Compute result
     const robdd* r = perm.permute(arg, 0);
     canonicalize_cache[arg] = r;
     return r;
   }
-
+  const robdd* remove_layer(const robdd* arg, int layer) {
+    if (arg==TRUE || arg==FALSE || arg->layer>layer) return arg;
+    if (arg->layer == layer) return Or(arg->one, arg->zero);
+    return robdd(arg->layer, remove_layer(arg->one,layer), remove_layer(arg->zero,layer)).intern();
+  }
 }
 
 bool check(const robdd::robdd* r, int s) {
@@ -354,6 +399,27 @@ void tests() {
     cout << enumerate(robdd::canonicalize(robdd::supset(next))) << endl;
     cout << enumerate(robdd::canonicalize(robdd::subset(prev))) << endl;
     cout << enumerate(robdd::canonicalize(robdd::subset(next))) << endl;
+    
+    for (int k=0; k<2; k++) {
+      const robdd::robdd * t = supset(k==0?prev:next);
+      for (int i=0; i<param::n; i++) {
+        const robdd::robdd * r = robdd::And(t, robdd::robdd(i,robdd::TRUE,robdd::FALSE).intern());
+        //const robdd::robdd * r = robdd::remove_layer(t, i);
+        auto r_sc = robdd::sat_count(r);
+        cout << i << ": " << (r_sc.first << r_sc.second) << ", ";
+        for (int j=0; j<param::n; j++) if (i!=j) {
+          const robdd::robdd * s = robdd::And(r, robdd::robdd(j,robdd::TRUE,robdd::FALSE).intern());
+          //const robdd::robdd * s = robdd::remove_layer(r, j);
+          auto s_sc = robdd::sat_count(s);
+          cout << " " << (s_sc.first << s_sc.second);
+        }
+        cout << ", " << robdd::get_element(r) << " " << robdd::get_non_element(r) << " " << enumerate(r) << endl;
+      }
+      /*for (int i=0; i<param::n; i++) {
+        const robdd::robdd * r = robdd::And(t, robdd::robdd(i,robdd::TRUE,robdd::FALSE).intern());
+        cout << i << ": " << enumerate(robdd::canonicalize(r)) << endl;
+      }*/
+    }
   }
 }
 
@@ -362,7 +428,7 @@ int main(int argc, const char *argv[]) {
     precomputed_subset[i] = construct(i);
   }
   cout << "Subsets precomputed." << endl;
-  //tests();
+//   tests();
   sequence* root = new sequence;
   for (int i=0; i<param::n; i++) {
     cur.insert(new sequence(root, precomputed_subset[(2<<i)-1]));
