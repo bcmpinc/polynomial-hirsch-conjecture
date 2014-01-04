@@ -18,7 +18,7 @@ using namespace std;
 
 //#define NDEBUG
 namespace param {
-  const int n=5;
+  const int n=6;
   const int w=2;
   const int d=n;
 }
@@ -263,6 +263,25 @@ namespace robdd {
     if (arg->layer == layer) return Or(arg->one, arg->zero);
     return robdd(arg->layer, remove_layer(arg->one,layer), remove_layer(arg->zero,layer)).intern();
   }
+  struct sat_info {
+    int count[param::n+1];
+    bool operator<(const sat_info &b) const {return memcmp(count, b.count, sizeof(count))<0;}
+  };
+  map<const robdd*, sat_info> info_cache;
+  const sat_info& info(const robdd* arg) {
+    auto it = info_cache.find(arg);
+    if (it != info_cache.end()) return it->second;
+    sat_info &r = info_cache[arg];
+    for (int i=0; i<param::n; i++) {
+      const robdd * v = And(arg, robdd(i,TRUE,FALSE).intern());
+      auto c = sat_count(v);
+      r.count[i] = c.first<<c.second;
+    }
+    auto c = sat_count(arg);
+    sort(r.count, r.count+param::n);
+    r.count[param::n] = c.first<<c.second;
+    return r;
+  }
 }
 
 bool check(const robdd::robdd* r, int s) {
@@ -325,7 +344,7 @@ struct sequence {
     /*if (forbidden == b.forbidden) {
       return prev < b.prev;
     }*/
-    return robdd::canonicalize(forbidden) < robdd::canonicalize(b.forbidden);
+    return robdd::info(forbidden) < robdd::info(b.forbidden);
   }
 };
 
@@ -434,7 +453,7 @@ int main(int argc, const char *argv[]) {
     cur.insert(new sequence(root, precomputed_subset[(2<<i)-1]));
   }
   while (!cur.empty()) {
-    cout << "Cache: " << cur.size() << endl;
+    cout << "Cache:" << cur.size() << "  robdd nodes:" << robdd::cache.size() << endl;
     for (sequence * s : cur) {
       seq = s;
       vector<const robdd::robdd *> compatible;
@@ -449,7 +468,7 @@ int main(int argc, const char *argv[]) {
     swap(cur,nxt);
     nxt.clear();
   }
-  cout << "Generated robdd nodes:" << robdd::cache.size() << endl;
+    
   // make memchecker happy :)
   robdd::clear_cache();
   root->unref();
