@@ -18,8 +18,7 @@ using namespace std;
 
 //#define NDEBUG
 namespace param {
-  const int n=6;
-  const int w=2;
+  const int n=5;
   const int d=n;
 }
 
@@ -258,14 +257,10 @@ namespace robdd {
     canonicalize_cache[arg] = r;
     return r;
   }
-  const robdd* remove_layer(const robdd* arg, int layer) {
-    if (arg==TRUE || arg==FALSE || arg->layer>layer) return arg;
-    if (arg->layer == layer) return Or(arg->one, arg->zero);
-    return robdd(arg->layer, remove_layer(arg->one,layer), remove_layer(arg->zero,layer)).intern();
-  }
   struct sat_info {
     int count[param::n+1];
-    bool operator<(const sat_info &b) const {return memcmp(count, b.count, sizeof(count))<0;}
+    bool operator< (const sat_info &b) const {return memcmp(count, b.count, sizeof(count))< 0;}
+    bool operator!=(const sat_info &b) const {return memcmp(count, b.count, sizeof(count))!=0;}
   };
   map<const robdd*, sat_info> info_cache;
   const sat_info& info(const robdd* arg) {
@@ -331,20 +326,42 @@ struct sequence {
   int refs;
   
   sequence() : forbidden(precomputed_subset[0]), prev(forbidden), tail(NULL), length(0), refs(1) {}
-  sequence(sequence * tail, const robdd::robdd * next) : 
-    forbidden(robdd::Or(tail->forbidden,robdd::Or(next, robdd::supset(robdd::And(robdd::subset(tail->prev), robdd::conj(robdd::subset(next))))))), 
-    prev(next), 
-    tail(tail), length(tail->length+1), refs(1) {tail->ref();}
+  sequence(sequence * tail, const robdd::robdd * next, const robdd::robdd * discard_base) : 
+    forbidden(robdd::Or(tail->forbidden,robdd::Or(next, robdd::supset(discard_base)))), 
+    prev(next),
+    tail(tail), 
+    length(tail->length+1), 
+    refs(1) 
+    {tail->ref();}
   ~sequence() {
     if (tail) tail->unref();
   }
   void ref() {++refs;}
   void unref() {if(--refs==0) delete this;}
-  bool operator<(const sequence &b) const {
-    /*if (forbidden == b.forbidden) {
-      return prev < b.prev;
-    }*/
-    return robdd::info(forbidden) < robdd::info(b.forbidden);
+};
+struct agent {
+  const robdd::robdd * forbidden;
+  const robdd::robdd * discard_base;
+  const robdd::robdd * next;
+  sequence * base;
+  agent(sequence * base) : forbidden(base->forbidden), discard_base(robdd::subset(base->prev)), next(robdd::FALSE), base(base) {base->ref();}
+  agent(const agent& cur, const robdd::robdd * c) : 
+    forbidden(robdd::Or(cur.forbidden,robdd::Or(robdd::subset(c),robdd::supset(c)))),
+    discard_base(robdd::And(cur.discard_base, robdd::conj(robdd::subset(c)))),
+    next(robdd::Or(cur.next, c)),
+    base(cur.base) {base->ref();};
+  agent(const agent &a) : forbidden(a.forbidden), discard_base(a.discard_base), next(a.next), base(a.base) {base->ref();}
+  ~agent() {base->unref();}
+  bool operator<(const agent &b) const {
+    // Define a total order.
+    auto inf_a = robdd::info(base->forbidden);
+    auto inf_b = robdd::info(b.base->forbidden);
+    if (inf_a != inf_b) return inf_a < inf_b;
+    return next < b.next;
+  }
+  // Call unref to release ownership.
+  sequence * new_sequence() {
+    return new sequence(base, next, discard_base);
   }
 };
 
@@ -372,29 +389,54 @@ ostream& operator<<(ostream& o, const sequence &s) {
   return o << enumerate(s.prev);
 }
 
-static set<sequence*,pointer_cmp<sequence>> cur, nxt;
-static sequence * seq;
-void generate_next(const vector<const robdd::robdd *> &old_compatible, const robdd::robdd * old_next, const robdd::robdd * not_anti, int depth) {
-  vector<const robdd::robdd *> compatible;
-  for (const robdd::robdd * c : old_compatible) {
-    if (robdd::And(not_anti, c) != robdd::FALSE) continue; // Skip those elements that would violate the anti-chain.
-    const robdd::robdd * next = robdd::Or(old_next, c); // Compute the new next set
-    sequence * x = new sequence(seq, next); // Create new sequence
-    assert(robdd::And(x->forbidden, next) == next);
-    if (nxt.empty()) { // Print if the first
-      cout << "n=" << param::n << " |F_i|<=" << param::w << " d=";
-      if (param::d>=param::n) cout << "n"; else cout << param::d;
-      cout << " t=" << x->length << ": " << *x << endl;
-    }
-    if (!nxt.insert(x).second) { // Insert into the nxt set
-      x->unref(); // It already existed in the set.
-    }
-    if (depth < param::w) { // If still allowed, recurse
-      generate_next(compatible, next, robdd::Or(not_anti,robdd::Or(robdd::subset(c),robdd::supset(c))), depth+1);
-    }
-    compatible.push_back(c); // Track elements that can be chosen in a recursive call
+struct agent_cmp {
+  inline bool operator()(const agent &a, const agent &b) {
+    // return true if a is better than b.
+    if (a.base->length!=b.base->length) return a.base->length < b.base->length;
+    const robdd::robdd* bad_a = a.base->forbidden;
+    const robdd::robdd* bad_b = b.base->forbidden;
+    int unsat_a = ({auto p=robdd::sat_count(bad_a); p.first<<p.second;});
+    int unsat_b = ({auto p=robdd::sat_count(bad_b); p.first<<p.second;});
+    if (unsat_a != unsat_b) return unsat_a < unsat_b;
+    return &a < &b; 
   }
 };
+
+static set<agent, agent_cmp> quality;
+static set<agent> current;
+void print_solution(sequence * x) {
+  static int longest=0;
+  static int counter=0;
+  counter++;
+  if (x->length > longest || counter >= 100000) { // Print the first and each n-th
+    longest = x->length;
+    counter = 0;
+//*/{
+    cout << "n=" << param::n << " d=";
+    if (param::d>=param::n) cout << "n"; else cout << param::d;
+    cout << " | T:" << quality.size() << " C:" << current.size() << " R:" << robdd::cache.size();
+    cout << " | t=" << x->length << ": " << *x;
+    cout << endl;
+  }
+}
+
+// Invariant: quality is a subset of current (but with a different order).
+void add_agent(agent a) {
+  auto it = current.find(a);
+  if (it != current.end()) {
+    // Already exists, check if better
+    if (!agent_cmp()(a, *it)) {
+      // it is worse
+      return;
+    }
+    // It is better: remove old one.
+    quality.erase(*it); // Noop if agent is already processed.
+    current.erase(it);
+  }
+  // Insert as new
+  quality.insert(a);
+  current.insert(a);
+}
 
 void tests() {
   if (param::n==4) {
@@ -412,12 +454,12 @@ void tests() {
     cout << enumerate(prev) << " = {123,024}" << endl;
     cout << enumerate(next) << " = {023,124}" << endl;
     cout << enumerate(robdd::And(robdd::subset(prev), robdd::conj(robdd::subset(next)))) << " = {13,04}" << endl;
-    cout << enumerate(robdd::canonicalize(prev)) << endl;
-    cout << enumerate(robdd::canonicalize(next)) << endl;
-    cout << enumerate(robdd::canonicalize(robdd::supset(prev))) << endl;
-    cout << enumerate(robdd::canonicalize(robdd::supset(next))) << endl;
-    cout << enumerate(robdd::canonicalize(robdd::subset(prev))) << endl;
-    cout << enumerate(robdd::canonicalize(robdd::subset(next))) << endl;
+//     cout << enumerate(robdd::canonicalize(prev)) << endl;
+//     cout << enumerate(robdd::canonicalize(next)) << endl;
+//     cout << enumerate(robdd::canonicalize(robdd::supset(prev))) << endl;
+//     cout << enumerate(robdd::canonicalize(robdd::supset(next))) << endl;
+//     cout << enumerate(robdd::canonicalize(robdd::subset(prev))) << endl;
+//     cout << enumerate(robdd::canonicalize(robdd::subset(next))) << endl;
     
     for (int k=0; k<2; k++) {
       const robdd::robdd * t = supset(k==0?prev:next);
@@ -432,7 +474,7 @@ void tests() {
           auto s_sc = robdd::sat_count(s);
           cout << " " << (s_sc.first << s_sc.second);
         }
-        cout << ", " << robdd::get_element(r) << " " << robdd::get_non_element(r) << " " << enumerate(r) << endl;
+        cout << ", " /*<< robdd::get_element(r) << " " << robdd::get_non_element(r)*/ << " " << enumerate(r) << endl;
       }
       /*for (int i=0; i<param::n; i++) {
         const robdd::robdd * r = robdd::And(t, robdd::robdd(i,robdd::TRUE,robdd::FALSE).intern());
@@ -442,35 +484,40 @@ void tests() {
   }
 }
 
+void generate_initial_population() {
+  sequence* root = new sequence;
+  for (int i=0; i<param::n; i++) {
+    sequence * start = new sequence(root, precomputed_subset[(2<<i)-1], robdd::FALSE);
+    add_agent(agent(start));
+    start->unref();
+  }
+  root->unref();
+}
+
 int main(int argc, const char *argv[]) {
   for (int i=0; i<(1<<param::n); i++) {
     precomputed_subset[i] = construct(i);
   }
   cout << "Subsets precomputed." << endl;
-//   tests();
-  sequence* root = new sequence;
-  for (int i=0; i<param::n; i++) {
-    cur.insert(new sequence(root, precomputed_subset[(2<<i)-1]));
-  }
-  while (!cur.empty()) {
-    cout << "Cache:" << cur.size() << "  robdd nodes:" << robdd::cache.size() << endl;
-    for (sequence * s : cur) {
-      seq = s;
-      vector<const robdd::robdd *> compatible;
-      for (int i : enumerate(robdd::conj(seq->forbidden)).result) {
-        const robdd::robdd * r = precomputed_subset[i];
-        assert(robdd::And(seq->forbidden, r) == robdd::FALSE);
-        compatible.push_back(r);
-      }
-      generate_next(compatible, robdd::FALSE, robdd::FALSE, 1);
-      seq->unref();
+  generate_initial_population();
+  while (!quality.empty()) {
+    auto it = quality.begin();
+    agent a = *it;
+    quality.erase(it);
+    if (a.next != robdd::FALSE) {
+      sequence * s = a.new_sequence();
+      print_solution(s);
+      add_agent(agent(s));
+      s->unref();
     }
-    swap(cur,nxt);
-    nxt.clear();
+    for (int i : enumerate(robdd::conj(a.forbidden)).result) {
+      const robdd::robdd * r = precomputed_subset[i];
+      agent b(a, r);
+      add_agent(b);
+    }
   }
     
   // make memchecker happy :)
   robdd::clear_cache();
-  root->unref();
   return 0;
 }
